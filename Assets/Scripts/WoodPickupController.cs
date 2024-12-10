@@ -1,9 +1,9 @@
 using UnityEngine;
+//using static UnityEditor.IMGUI.Controls.PrimitiveBoundsHandle;
 
 public class WoodPickupController : MonoBehaviour
 {
     public float maxPickupDistance = 3f;  // Maximum distance to pick up objects
-    public LayerMask interactionLayerMask; // Layer mask for interactable objects
     public Camera playerCamera;           // Reference to the player's camera
     public float holdDistance = 1.5f;     // Distance to hold the object in front of the camera
     public float positionSmoothSpeed = 10f; // Speed for smoothing position movement
@@ -13,12 +13,21 @@ public class WoodPickupController : MonoBehaviour
     private GameObject pickedObject = null;   // The object currently being held
     private Rigidbody pickedRigidbody = null; // Rigidbody of the picked object
     private bool isHolding = false;           // Is the player holding an object?
+    private bool axeIsPickedUp; // Flag to track if the axe is picked up
+
+    public AxeController axeScript; // Reference to the AxeController script
+
+    // Automatically configure the interaction layer mask for layer 8 ("Wood")
+    private LayerMask interactionLayerMask = 1 << 8;
 
     void Update()
     {
         UpdateInteractionTarget();
         HandlePickupAndDrop();
         UpdateHeldObjectPositionAndRotation();
+
+        //Failsafe reset
+        HandleFailsafeReset();
     }
 
     void UpdateInteractionTarget()
@@ -29,28 +38,72 @@ public class WoodPickupController : MonoBehaviour
 
         if (Physics.Raycast(ray, out hit, maxPickupDistance, interactionLayerMask))
         {
-            if (hit.collider.CompareTag("Wood") && !isHolding) // Ensure not already holding an object
+            // Ensure the axe doesn't block interaction with wood
+            if (hit.collider.CompareTag("Axe"))
             {
+                Debug.Log("Ignoring axe in interaction check.");
+                axeIsPickedUp = true; // Track that the axe is picked up
+                targetedObject = null; // Reset targeted object
+                return;
+            }
+
+            if (hit.collider.CompareTag("Wood") && !isHolding)
+            {
+                // Reset the axe's impact trigger using the instance reference
+                if (axeScript != null)
+                {
+                    axeScript.ResetImpactTrigger();
+                }
+                else
+                {
+                    Debug.LogWarning("Axe script reference is missing!");
+                }
+
                 targetedObject = hit.collider.gameObject;
+                Debug.Log($"Targeting object: {targetedObject.name}");
                 return;
             }
         }
 
+        // If no valid target is found, reset targetedObject
         targetedObject = null;
     }
 
+    //Backup failsafe for picking up wood for edgecase that it stops triggering or flag fails
+    private void PickupWood(GameObject wood)
+    {
+        if (wood == null)
+        {
+            Debug.LogWarning("Attempted to pick up a null wood object!");
+            return;
+        }
+
+        isHolding = true; // Set the holding flag
+        Debug.Log($"Picked up wood: {wood.name}");
+        wood.SetActive(false); // Example logic for picking up (disable the object)
+
+        // Schedule a reset to ensure the state doesn't remain stuck
+        Invoke(nameof(ResetPickupState), 0.1f); // Reset state after a brief delay
+    }
+
+
+
+
     void HandlePickupAndDrop()
     {
-        if (Input.GetMouseButtonDown(0) && !isHolding) // Left mouse button to pick up
+        if (Input.GetMouseButtonDown(0))
         {
+            // Always allow picking up wood or other objects
             TryPickupObject();
         }
 
-        if (Input.GetMouseButtonUp(0) && isHolding) // Release with left mouse button
+        if (Input.GetMouseButtonUp(0) && isHolding)
         {
+            // Drop whatever the player is holding
             DropObject();
         }
     }
+
 
     void TryPickupObject()
     {
@@ -66,16 +119,16 @@ public class WoodPickupController : MonoBehaviour
                 pickedRigidbody.angularVelocity = Vector3.zero;
                 pickedRigidbody.isKinematic = true; // Disable physics temporarily
 
-                // Center the object on its mesh center
-                CenterTransformOnMesh(pickedObject);
-
-                // Move to the center of the camera
-                ResetTransformToCameraCenter();
-
                 isHolding = true;
                 Debug.Log($"Picked up {pickedObject.name}");
             }
+            else
+            {
+                Debug.LogWarning("Targeted object does not have a Rigidbody.");
+            }
         }
+
+
     }
 
     void DropObject()
@@ -87,13 +140,16 @@ public class WoodPickupController : MonoBehaviour
                 pickedRigidbody.isKinematic = false; // Re-enable physics
             }
 
+            Debug.Log($"Dropped object: {pickedObject.name}");
             pickedObject = null;
             pickedRigidbody = null;
             isHolding = false;
 
-            Debug.Log("Dropped object.");
+            // Ensure we can interact with wood again
+            targetedObject = null;
         }
     }
+
 
     void UpdateHeldObjectPositionAndRotation()
     {
@@ -101,10 +157,6 @@ public class WoodPickupController : MonoBehaviour
         {
             // Calculate the target position in front of the camera
             Vector3 targetPosition = playerCamera.transform.position + playerCamera.transform.forward * holdDistance;
-
-            // Restrict the Y position to a maximum height
-            float maxYPosition = 2f; // Adjust this value as needed
-            targetPosition.y = Mathf.Min(targetPosition.y, maxYPosition);
 
             // Smoothly move the object to the target position
             pickedObject.transform.position = Vector3.Lerp(pickedObject.transform.position, targetPosition, Time.deltaTime * positionSmoothSpeed);
@@ -117,40 +169,20 @@ public class WoodPickupController : MonoBehaviour
         }
     }
 
-
-    void ResetTransformToCameraCenter()
+    private void ResetPickupState()
     {
-        if (pickedObject != null)
-        {
-            // Move the object to the exact center of the camera's view
-            pickedObject.transform.position = playerCamera.transform.position + playerCamera.transform.forward * holdDistance;
-
-            // Reset the object's rotation to align with the camera
-            pickedObject.transform.rotation = Quaternion.LookRotation(playerCamera.transform.forward, Vector3.up);
-
-            Debug.Log($"Object {pickedObject.name} reset to camera center.");
-        }
+        isHolding = false; // Allow picking up new objects
+        axeIsPickedUp = false; // Reset axe pickup flag
+        Debug.Log("Pickup state reset.");
     }
 
-    void CenterTransformOnMesh(GameObject obj)
+    private void HandleFailsafeReset()
     {
-        MeshFilter meshFilter = obj.GetComponent<MeshFilter>();
-        if (meshFilter != null)
+        // Reset wood pickup state when "R" is pressed
+        if (Input.GetKeyDown(KeyCode.R))
         {
-            // Calculate the center of the mesh
-            Vector3 meshCenter = meshFilter.sharedMesh.bounds.center;
-
-            // Adjust the transform to move the object's origin to the mesh's center
-            obj.transform.position += obj.transform.TransformVector(meshCenter);
-
-            // Recalculate local position of children (if any) to preserve visual integrity
-            foreach (Transform child in obj.transform)
-            {
-                child.localPosition -= meshCenter;
-            }
-
-            Debug.Log($"Object {obj.name} centered on its mesh.");
+            ResetPickupState();
+            Debug.Log("Failsafe reset triggered.");
         }
     }
-
 }

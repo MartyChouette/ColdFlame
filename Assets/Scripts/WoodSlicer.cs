@@ -26,8 +26,12 @@ public class WoodSlicer : MonoBehaviour
                 isSlicing = true; // Set slicing flag to true
                 PerformSlice(collision.gameObject);
             }
+
         }
     }
+
+
+
 
     void PerformSlice(GameObject target)
     {
@@ -58,6 +62,11 @@ public class WoodSlicer : MonoBehaviour
             GameObject upperHull = slicedObject.CreateUpperHull(target, crossSectionMaterial);
             GameObject lowerHull = slicedObject.CreateLowerHull(target, crossSectionMaterial);
 
+
+            // Adjust the pivot points of the sliced pieces
+            AdjustPivotToBoundsCenter(upperHull);
+            AdjustPivotToBoundsCenter(lowerHull);
+
             // Add physics and re-tag the sliced pieces
             AddPhysicsAndTag(upperHull);
             AddPhysicsAndTag(lowerHull);
@@ -83,10 +92,25 @@ public class WoodSlicer : MonoBehaviour
 
     void AddPhysicsAndTag(GameObject obj)
     {
-        // Add physics components
-        var meshCollider = obj.AddComponent<MeshCollider>();
-        meshCollider.convex = true; // Ensure the collider is convex
-        obj.AddComponent<Rigidbody>(); // Add Rigidbody for physics interaction
+        if (obj == null)
+        {
+            Debug.LogWarning("AddPhysicsAndTag received a null object.");
+            return;
+        }
+
+        // Add physics components if they are missing
+        MeshCollider meshCollider = obj.GetComponent<MeshCollider>();
+        if (meshCollider == null)
+        {
+            meshCollider = obj.AddComponent<MeshCollider>();
+            meshCollider.convex = true;
+        }
+
+        Rigidbody rigidbody = obj.GetComponent<Rigidbody>();
+        if (rigidbody == null)
+        {
+            rigidbody = obj.AddComponent<Rigidbody>();
+        }
 
         // Re-tag the object as "Wood"
         obj.tag = "Wood";
@@ -94,6 +118,7 @@ public class WoodSlicer : MonoBehaviour
         // Re-layer the object as "Wood" layer 8
         obj.layer = 8;
     }
+
 
     Vector3 GetDominantAxis(GameObject obj)
     {
@@ -118,11 +143,39 @@ public class WoodSlicer : MonoBehaviour
     bool IsTooSmall(GameObject obj)
     {
         // Check if the object's size is below a certain threshold
-        return obj.GetComponent<Renderer>().bounds.size.magnitude < 0.1f;
+        return obj.GetComponent<Renderer>().bounds.size.magnitude < 0.01f;
     }
 
     void ResetSlicingFlag()
     {
         isSlicing = false;
+    }
+
+    void AdjustPivotToBoundsCenter(GameObject obj)
+    {
+        MeshFilter meshFilter = obj.GetComponent<MeshFilter>();
+        if (meshFilter == null || meshFilter.mesh == null)
+        {
+            Debug.LogWarning("AdjustPivotToBoundsCenter: Missing MeshFilter or Mesh.");
+            return;
+        }
+
+        Mesh mesh = meshFilter.mesh;
+        Vector3 boundsCenter = mesh.bounds.center;
+        obj.transform.position += obj.transform.TransformPoint(boundsCenter) - obj.transform.position;
+
+        Vector3 offset = obj.transform.InverseTransformPoint(obj.transform.position) - boundsCenter;
+        mesh.vertices = ApplyOffsetToVertices(mesh.vertices, offset);
+        mesh.RecalculateBounds();
+    }
+
+
+    Vector3[] ApplyOffsetToVertices(Vector3[] vertices, Vector3 offset)
+    {
+        for (int i = 0; i < vertices.Length; i++)
+        {
+            vertices[i] += offset;
+        }
+        return vertices;
     }
 }
